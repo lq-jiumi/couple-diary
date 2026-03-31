@@ -1,6 +1,4 @@
-const axios = require('axios');
-
-const FIREBASE_API_KEY = 'AIzaSyBokK1uxWbre54SIAvcDbpUsBXrfDc2p-4';
+const { supabase } = require('../config/supabase');
 
 async function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -9,23 +7,18 @@ async function verifyToken(req, res, next) {
     return res.status(401).json({ error: 'Unauthorized: No token provided' });
   }
 
-  const idToken = authHeader.split('Bearer ')[1];
+  const token = authHeader.split('Bearer ')[1];
 
   try {
-    const response = await axios.post(
-      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_API_KEY}`,
-      { idToken }
-    );
+    const { data: user, error } = await supabase.auth.getUser(token);
 
-    const users = response.data.users;
-    if (!users || users.length === 0) {
+    if (error || !user) {
       return res.status(401).json({ error: 'Unauthorized: Invalid token' });
     }
 
-    const user = users[0];
     req.user = {
-      uid: user.localId,
-      email: user.email,
+      uid: user.user.id,
+      email: user.user.email,
     };
     next();
   } catch (error) {

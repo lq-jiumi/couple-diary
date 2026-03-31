@@ -1,6 +1,4 @@
-const admin = require('firebase-admin');
-const firebaseAuthService = require('../services/firebaseAuthService');
-const db = require('../config/firebase');
+const { supabase } = require('../config/supabase');
 
 class AuthController {
   async register(req, res) {
@@ -11,31 +9,58 @@ class AuthController {
         return res.status(400).json({ error: 'Email and password are required' });
       }
 
-      const firebaseUser = await firebaseAuthService.register(email, password, displayName);
-      const idToken = firebaseUser.idToken;
-      const localId = firebaseUser.localId;
-
-      await db.collection('users').doc(localId).set({
+      // 使用管理员API创建用户，避免发送验证邮件
+      const { data: user, error: authError } = await supabase.auth.admin.createUser({
         email,
-        displayName: displayName || email.split('@')[0],
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        coupleId: null,
-        partnerId: null,
+        password,
+        email_confirm: true, // 自动确认邮箱，避免发送验证邮件
+        user_metadata: {
+          displayName: displayName || email.split('@')[0],
+        }
       });
+
+      if (authError) {
+        return res.status(400).json({ error: authError.message });
+      }
+
+      // 登录用户以获取访问令牌
+      const { data: session, error: loginError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (loginError) {
+        return res.status(401).json({ error: loginError.message });
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from('users')
+        .insert({
+          id: user.user.id,
+          email,
+          displayname: displayName || email.split('@')[0],
+          createdat: new Date(),
+          coupleid: null,
+          partnerid: null,
+        })
+        .select();
+
+      if (profileError) {
+        return res.status(400).json({ error: profileError.message });
+      }
 
       res.status(201).json({
         message: 'User registered successfully',
         user: {
-          uid: localId,
-          email: email,
+          uid: user.user.id,
+          email: user.user.email,
           displayName: displayName || email.split('@')[0],
         },
-        token: idToken,
+        token: session.session.access_token,
       });
     } catch (error) {
-      console.error('Registration error:', error.response?.data || error.message);
-      const errorMessage = error.response?.data?.error?.message || 'Registration failed';
-      res.status(400).json({ error: errorMessage });
+      console.error('Registration error:', error);
+      res.status(400).json({ error: error.message });
     }
   }
 
@@ -47,33 +72,39 @@ class AuthController {
         return res.status(400).json({ error: 'Email and password are required' });
       }
 
-      const firebaseUser = await firebaseAuthService.login(email, password);
-
-      const userDoc = await db.collection('users').doc(firebaseUser.localId).get();
-      let userData = {
+      const { data: user, error: authError } = await supabase.auth.signInWithPassword({
         email,
-        displayName: email.split('@')[0],
-      };
+        password,
+      });
 
-      if (userDoc.exists) {
-        userData = userDoc.data();
+      if (authError) {
+        return res.status(401).json({ error: authError.message });
+      }
+
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', user.user.id)
+        .single();
+
+      if (userError) {
+        return res.status(404).json({ error: 'User not found' });
       }
 
       res.json({
         message: 'Login successful',
         user: {
-          uid: firebaseUser.localId,
-          email: email,
-          displayName: userData.displayName,
-          coupleId: userData.coupleId,
-          partnerId: userData.partnerId,
+          uid: user.user.id,
+          email: user.user.email,
+          displayName: userData.displayname,
+          coupleId: userData.coupleid,
+          partnerId: userData.partnerid,
         },
-        token: firebaseUser.idToken,
+        token: user.session.access_token,
       });
     } catch (error) {
-      console.error('Login error:', error.response?.data || error.message);
-      const errorMessage = error.response?.data?.error?.message || 'Login failed';
-      res.status(401).json({ error: errorMessage });
+      console.error('Login error:', error);
+      res.status(401).json({ error: error.message });
     }
   }
 
@@ -83,22 +114,30 @@ class AuthController {
 
   async getCurrentUser(req, res) {
     try {
-      const userDoc = await db.collection('users').doc(req.user.uid).get();
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', req.user.uid)
+        .single();
 
-      if (!userDoc.exists) {
+      if (userError) {
         return res.status(404).json({ error: 'User not found' });
       }
 
-      const userData = userDoc.data();
       let partnerData = null;
 
-      if (userData.partnerId) {
-        const partnerDoc = await db.collection('users').doc(userData.partnerId).get();
-        if (partnerDoc.exists) {
+      if (userData.partnerid) {
+        const { data: partner, error: partnerError } = await supabase
+          .from('users')
+          .select('id, email, displayname')
+          .eq('id', userData.partnerid)
+          .single();
+
+        if (!partnerError) {
           partnerData = {
-            uid: partnerDoc.id,
-            email: partnerDoc.data().email,
-            displayName: partnerDoc.data().displayName,
+            uid: partner.id,
+            email: partner.email,
+            displayName: partner.displayname,
           };
         }
       }
@@ -107,9 +146,9 @@ class AuthController {
         user: {
           uid: req.user.uid,
           email: userData.email,
-          displayName: userData.displayName,
-          coupleId: userData.coupleId,
-          partnerId: userData.partnerId,
+          displayName: userData.displayname,
+          coupleId: userData.coupleid,
+          partnerId: userData.partnerid,
         },
         partner: partnerData,
       });

@@ -1,32 +1,42 @@
-const admin = require('firebase-admin');
-const db = require('../config/firebase');
+const { supabase } = require('../config/supabase');
 
 class DiaryController {
   async getEntries(req, res) {
     try {
-      const userDoc = await db.collection('users').doc(req.user.uid).get();
-      const userData = userDoc.data();
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('coupleid')
+        .eq('id', req.user.uid)
+        .single();
 
-      if (!userData.coupleId) {
+      if (userError) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (!userData.coupleid) {
         return res.status(400).json({ error: 'Not bound to a couple' });
       }
 
       const { year, month } = req.query;
-      let query = db.collection('diary_entries')
-        .where('coupleId', '==', userData.coupleId);
+      let query = supabase
+        .from('diary_entries')
+        .select('*')
+        .eq('coupleid', userData.coupleid)
+        .order('date', { ascending: false });
 
       if (year && month) {
         const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
         const endDate = `${year}-${String(month).padStart(2, '0')}-31`;
-        query = query.where('date', '>=', startDate).where('date', '<=', endDate);
+        query = query
+          .gte('date', startDate)
+          .lte('date', endDate);
       }
 
-      const snapshot = await query.orderBy('date', 'desc').get();
+      const { data: entries, error: entriesError } = await query;
 
-      const entries = [];
-      snapshot.forEach(doc => {
-        entries.push({ id: doc.id, ...doc.data() });
-      });
+      if (entriesError) {
+        return res.status(500).json({ error: entriesError.message });
+      }
 
       res.json({ entries });
     } catch (error) {
@@ -38,27 +48,34 @@ class DiaryController {
   async getEntryByDate(req, res) {
     try {
       const { date } = req.params;
-      const userDoc = await db.collection('users').doc(req.user.uid).get();
-      const userData = userDoc.data();
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('coupleid')
+        .eq('id', req.user.uid)
+        .single();
 
-      if (!userData.coupleId) {
+      if (userError) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (!userData.coupleid) {
         return res.status(400).json({ error: 'Not bound to a couple' });
       }
 
-      const snapshot = await db.collection('diary_entries')
-        .where('coupleId', '==', userData.coupleId)
-        .where('date', '==', date)
-        .limit(1)
-        .get();
+      const { data: entry, error: entryError } = await supabase
+        .from('diary_entries')
+        .select('*')
+        .eq('coupleid', userData.coupleid)
+        .eq('date', date)
+        .single();
 
-      if (snapshot.empty) {
+      if (entryError && entryError.code === 'PGRST116') {
         return res.json({ entry: null });
       }
 
-      let entry = null;
-      snapshot.forEach(doc => {
-        entry = { id: doc.id, ...doc.data() };
-      });
+      if (entryError) {
+        return res.status(500).json({ error: entryError.message });
+      }
 
       res.json({ entry });
     } catch (error) {
@@ -70,10 +87,17 @@ class DiaryController {
   async createEntry(req, res) {
     try {
       const { date, content, images } = req.body;
-      const userDoc = await db.collection('users').doc(req.user.uid).get();
-      const userData = userDoc.data();
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('coupleid')
+        .eq('id', req.user.uid)
+        .single();
 
-      if (!userData.coupleId) {
+      if (userError) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (!userData.coupleid) {
         return res.status(400).json({ error: 'Not bound to a couple' });
       }
 
@@ -81,35 +105,37 @@ class DiaryController {
         return res.status(400).json({ error: 'Date is required' });
       }
 
-      const existingSnapshot = await db.collection('diary_entries')
-        .where('coupleId', '==', userData.coupleId)
-        .where('date', '==', date)
-        .limit(1)
-        .get();
+      const { data: existingEntry, error: existingError } = await supabase
+        .from('diary_entries')
+        .select('id')
+        .eq('coupleid', userData.coupleid)
+        .eq('date', date)
+        .single();
 
-      if (!existingSnapshot.empty) {
+      if (!existingError) {
         return res.status(400).json({ error: 'Entry already exists for this date' });
       }
 
-      const entryRef = await db.collection('diary_entries').add({
-        coupleId: userData.coupleId,
-        date,
-        content: content || '',
-        images: images || [],
-        createdBy: req.user.uid,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      const { data: newEntry, error: createError } = await supabase
+        .from('diary_entries')
+        .insert({
+          coupleid: userData.coupleid,
+          date,
+          content: content || '',
+          images: images || [],
+          createdby: req.user.uid,
+          createdat: new Date(),
+          updatedat: new Date(),
+        })
+        .select();
+
+      if (createError) {
+        return res.status(500).json({ error: createError.message });
+      }
 
       res.status(201).json({
         message: 'Entry created successfully',
-        entry: {
-          id: entryRef.id,
-          coupleId: userData.coupleId,
-          date,
-          content,
-          images,
-        },
+        entry: newEntry[0],
       });
     } catch (error) {
       console.error('Create entry error:', error);
@@ -121,43 +147,49 @@ class DiaryController {
     try {
       const { date } = req.params;
       const { content, images } = req.body;
-      const userDoc = await db.collection('users').doc(req.user.uid).get();
-      const userData = userDoc.data();
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('coupleid')
+        .eq('id', req.user.uid)
+        .single();
 
-      if (!userData.coupleId) {
+      if (userError) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (!userData.coupleid) {
         return res.status(400).json({ error: 'Not bound to a couple' });
       }
 
-      const snapshot = await db.collection('diary_entries')
-        .where('coupleId', '==', userData.coupleId)
-        .where('date', '==', date)
-        .limit(1)
-        .get();
+      const { data: entry, error: entryError } = await supabase
+        .from('diary_entries')
+        .select('id')
+        .eq('coupleid', userData.coupleid)
+        .eq('date', date)
+        .single();
 
-      if (snapshot.empty) {
+      if (entryError) {
         return res.status(404).json({ error: 'Entry not found' });
       }
 
-      let entryId;
-      snapshot.forEach(doc => {
-        entryId = doc.id;
-      });
+      const { data: updatedEntry, error: updateError } = await supabase
+        .from('diary_entries')
+        .update({
+          content: content || '',
+          images: images || [],
+          updatedat: new Date(),
+          updatedby: req.user.uid,
+        })
+        .eq('id', entry.id)
+        .select();
 
-      await db.collection('diary_entries').doc(entryId).update({
-        content: content || '',
-        images: images || [],
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedBy: req.user.uid,
-      });
+      if (updateError) {
+        return res.status(500).json({ error: updateError.message });
+      }
 
       res.json({
         message: 'Entry updated successfully',
-        entry: {
-          id: entryId,
-          date,
-          content,
-          images,
-        },
+        entry: updatedEntry[0],
       });
     } catch (error) {
       console.error('Update entry error:', error);
@@ -168,29 +200,39 @@ class DiaryController {
   async deleteEntry(req, res) {
     try {
       const { date } = req.params;
-      const userDoc = await db.collection('users').doc(req.user.uid).get();
-      const userData = userDoc.data();
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('coupleid')
+        .eq('id', req.user.uid)
+        .single();
 
-      if (!userData.coupleId) {
+      if (userError) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (!userData.coupleid) {
         return res.status(400).json({ error: 'Not bound to a couple' });
       }
 
-      const snapshot = await db.collection('diary_entries')
-        .where('coupleId', '==', userData.coupleId)
-        .where('date', '==', date)
-        .limit(1)
-        .get();
+      const { data: entry, error: entryError } = await supabase
+        .from('diary_entries')
+        .select('id')
+        .eq('coupleid', userData.coupleid)
+        .eq('date', date)
+        .single();
 
-      if (snapshot.empty) {
+      if (entryError) {
         return res.status(404).json({ error: 'Entry not found' });
       }
 
-      let entryId;
-      snapshot.forEach(doc => {
-        entryId = doc.id;
-      });
+      const { error: deleteError } = await supabase
+        .from('diary_entries')
+        .delete()
+        .eq('id', entry.id);
 
-      await db.collection('diary_entries').doc(entryId).delete();
+      if (deleteError) {
+        return res.status(500).json({ error: deleteError.message });
+      }
 
       res.json({ message: 'Entry deleted successfully' });
     } catch (error) {

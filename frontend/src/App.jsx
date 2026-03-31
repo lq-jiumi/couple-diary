@@ -6,6 +6,7 @@ import CalendarPage from './pages/CalendarPage';
 import DiaryPage from './pages/DiaryPage';
 import SettingsPage from './pages/SettingsPage';
 import BindCouplePage from './pages/BindCouplePage';
+import TodayDiaryRedirect from './pages/TodayDiaryRedirect';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -58,6 +59,11 @@ function App() {
       <Route path="/" element={
         <ProtectedRoute>
           {isBound ? <CalendarPage /> : <Navigate to="/bind" replace />}
+        </ProtectedRoute>
+      } />
+      <Route path="/diary" element={
+        <ProtectedRoute>
+          <TodayDiaryRedirect />
         </ProtectedRoute>
       } />
       <Route path="/diary/:date" element={

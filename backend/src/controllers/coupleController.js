@@ -1,18 +1,19 @@
-const admin = require('firebase-admin');
-const db = require('../config/firebase');
+const { supabase } = require('../config/supabase');
 
 class CoupleController {
   async getCoupleInfo(req, res) {
     try {
-      const userDoc = await db.collection('users').doc(req.user.uid).get();
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', req.user.uid)
+        .single();
 
-      if (!userDoc.exists) {
+      if (userError) {
         return res.status(404).json({ error: 'User not found' });
       }
 
-      const userData = userDoc.data();
-
-      if (!userData.coupleId) {
+      if (!userData.coupleid) {
         return res.json({
           couple: null,
           isBound: false,
@@ -20,23 +21,31 @@ class CoupleController {
         });
       }
 
-      const coupleDoc = await db.collection('couples').doc(userData.coupleId).get();
-      const partnerId = userData.partnerId;
+      const { data: couple, error: coupleError } = await supabase
+        .from('couples')
+        .select('*')
+        .eq('id', userData.coupleid)
+        .single();
 
       let partnerData = null;
-      if (partnerId) {
-        const partnerDoc = await db.collection('users').doc(partnerId).get();
-        if (partnerDoc.exists) {
+      if (userData.partnerid) {
+        const { data: partner, error: partnerError } = await supabase
+          .from('users')
+          .select('id, email, displayname')
+          .eq('id', userData.partnerid)
+          .single();
+
+        if (!partnerError) {
           partnerData = {
-            uid: partnerDoc.id,
-            email: partnerDoc.data().email,
-            displayName: partnerDoc.data().displayName,
+            uid: partner.id,
+            email: partner.email,
+            displayName: partner.displayname,
           };
         }
       }
 
       res.json({
-        couple: coupleDoc.exists ? { id: coupleDoc.id, ...coupleDoc.data() } : null,
+        couple: couple || null,
         isBound: true,
         partner: partnerData,
         anniversaries: userData.anniversaries || [],
@@ -49,10 +58,17 @@ class CoupleController {
 
   async createInviteCode(req, res) {
     try {
-      const userDoc = await db.collection('users').doc(req.user.uid).get();
-      const userData = userDoc.data();
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('coupleid')
+        .eq('id', req.user.uid)
+        .single();
 
-      if (userData.coupleId) {
+      if (userError) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (userData.coupleid) {
         return res.status(400).json({ error: 'Already bound to a couple' });
       }
 
@@ -60,13 +76,20 @@ class CoupleController {
       const expiresAt = new Date();
       expiresAt.setHours(expiresAt.getHours() + 24);
 
-      await db.collection('invites').doc(inviteCode).set({
-        createdBy: req.user.uid,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        expiresAt: expiresAt,
-        used: false,
-        usedBy: null,
-      });
+      const { error: inviteError } = await supabase
+        .from('invites')
+        .insert({
+          id: inviteCode,
+          createdby: req.user.uid,
+          createdat: new Date(),
+          expiresat: expiresAt,
+          used: false,
+          usedby: null,
+        });
+
+      if (inviteError) {
+        return res.status(500).json({ error: inviteError.message });
+      }
 
       res.json({
         inviteCode,
@@ -87,48 +110,69 @@ class CoupleController {
         return res.status(400).json({ error: 'Invite code is required' });
       }
 
-      const inviteDoc = await db.collection('invites').doc(inviteCode).get();
+      const { data: invite, error: inviteError } = await supabase
+        .from('invites')
+        .select('*')
+        .eq('id', inviteCode)
+        .single();
 
-      if (!inviteDoc.exists) {
+      if (inviteError) {
         return res.status(404).json({ error: 'Invalid invite code' });
       }
 
-      const inviteData = inviteDoc.data();
-
-      if (inviteData.used) {
+      if (invite.used) {
         return res.status(400).json({ error: 'Invite code already used' });
       }
 
-      if (inviteData.expiresAt.toDate() < new Date()) {
+      if (invite.expiresat < new Date()) {
         return res.status(400).json({ error: 'Invite code has expired' });
       }
 
-      if (inviteData.createdBy === req.user.uid) {
+      if (invite.createdby === req.user.uid) {
         return res.status(400).json({ error: 'Cannot use your own invite code' });
       }
 
-      const coupleId = inviteData.createdBy + '_' + req.user.uid;
+      const coupleId = invite.createdby + '_' + req.user.uid;
 
-      await db.collection('couples').doc(coupleId).set({
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        member1: inviteData.createdBy,
-        member2: req.user.uid,
-      });
+      const { error: coupleError } = await supabase
+        .from('couples')
+        .insert({
+          id: coupleId,
+          createdat: new Date(),
+          member1: invite.createdby,
+          member2: req.user.uid,
+        });
 
-      await db.collection('users').doc(req.user.uid).update({
-        coupleId,
-        partnerId: inviteData.createdBy,
-      });
+      if (coupleError) {
+        return res.status(500).json({ error: coupleError.message });
+      }
 
-      await db.collection('users').doc(inviteData.createdBy).update({
-        coupleId,
-        partnerId: req.user.uid,
-      });
+      const { error: user1Error } = await supabase
+        .from('users')
+        .update({ coupleid: coupleId, partnerid: invite.createdby })
+        .eq('id', req.user.uid);
 
-      await db.collection('invites').doc(inviteCode).update({
-        used: true,
-        usedBy: req.user.uid,
-      });
+      if (user1Error) {
+        return res.status(500).json({ error: user1Error.message });
+      }
+
+      const { error: user2Error } = await supabase
+        .from('users')
+        .update({ coupleid: coupleId, partnerid: req.user.uid })
+        .eq('id', invite.createdby);
+
+      if (user2Error) {
+        return res.status(500).json({ error: user2Error.message });
+      }
+
+      const { error: updateInviteError } = await supabase
+        .from('invites')
+        .update({ used: true, usedby: req.user.uid })
+        .eq('id', inviteCode);
+
+      if (updateInviteError) {
+        return res.status(500).json({ error: updateInviteError.message });
+      }
 
       res.json({
         message: 'Successfully joined couple',
@@ -148,28 +192,50 @@ class CoupleController {
         return res.status(400).json({ error: 'Confirmation required' });
       }
 
-      const userDoc = await db.collection('users').doc(req.user.uid).get();
-      const userData = userDoc.data();
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', req.user.uid)
+        .single();
 
-      if (!userData.coupleId) {
+      if (userError) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      if (!userData.coupleid) {
         return res.status(400).json({ error: 'Not bound to any couple' });
       }
 
-      const partnerId = userData.partnerId;
+      const partnerId = userData.partnerid;
 
-      await db.collection('users').doc(req.user.uid).update({
-        coupleId: null,
-        partnerId: null,
-      });
+      const { error: user1Error } = await supabase
+        .from('users')
+        .update({ coupleid: null, partnerid: null })
+        .eq('id', req.user.uid);
 
-      if (partnerId) {
-        await db.collection('users').doc(partnerId).update({
-          coupleId: null,
-          partnerId: null,
-        });
+      if (user1Error) {
+        return res.status(500).json({ error: user1Error.message });
       }
 
-      await db.collection('couples').doc(userData.coupleId).delete();
+      if (partnerId) {
+        const { error: user2Error } = await supabase
+          .from('users')
+          .update({ coupleid: null, partnerid: null })
+          .eq('id', partnerId);
+
+        if (user2Error) {
+          return res.status(500).json({ error: user2Error.message });
+        }
+      }
+
+      const { error: deleteCoupleError } = await supabase
+        .from('couples')
+        .delete()
+        .eq('id', userData.coupleid);
+
+      if (deleteCoupleError) {
+        return res.status(500).json({ error: deleteCoupleError.message });
+      }
 
       res.json({ message: 'Successfully unbound from couple' });
     } catch (error) {
@@ -182,9 +248,14 @@ class CoupleController {
     try {
       const { anniversaries } = req.body;
 
-      await db.collection('users').doc(req.user.uid).update({
-        anniversaries: anniversaries || [],
-      });
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ anniversaries: anniversaries || [] })
+        .eq('id', req.user.uid);
+
+      if (updateError) {
+        return res.status(500).json({ error: updateError.message });
+      }
 
       res.json({ message: 'Anniversaries updated', anniversaries });
     } catch (error) {

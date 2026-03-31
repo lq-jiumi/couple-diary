@@ -1,26 +1,12 @@
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+const { supabase } = require('../config/supabase');
 const { v4: uuidv4 } = require('uuid');
-const imageService = require('../services/imageService');
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = process.env.UPLOAD_DIR || './uploads';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const filename = imageService.generateFileName(file.originalname);
-    cb(null, filename);
-  },
-});
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
-  const allowedExtensions = (process.env.ALLOWED_EXTENSIONS || 'jpg,jpeg,png,webp').split(',');
-  const ext = path.extname(file.originalname).toLowerCase().slice(1);
+  const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp'];
+  const ext = file.originalname.split('.').pop().toLowerCase();
 
   if (allowedExtensions.includes(ext)) {
     cb(null, true);
@@ -33,7 +19,7 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024,
+    fileSize: 10 * 1024 * 1024, // 10MB limit
   },
 });
 
@@ -54,32 +40,58 @@ class UploadController {
         return res.status(400).json({ error: 'No file uploaded' });
       }
 
-      const fileUrl = imageService.getFileUrl(req.file.filename);
+      try {
+        const fileExt = req.file.originalname.split('.').pop().toLowerCase();
+        const fileName = `${uuidv4()}.${fileExt}`;
+        const bucketName = 'couple-diary';
 
-      res.json({
-        message: 'File uploaded successfully',
-        image: {
-          filename: req.file.filename,
-          url: fileUrl,
-          originalName: req.file.originalname,
-          size: req.file.size,
-        },
-      });
+        const { data, error } = await supabase.storage
+          .from(bucketName)
+          .upload(fileName, req.file.buffer, {
+            contentType: req.file.mimetype,
+            upsert: false,
+          });
+
+        if (error) {
+          console.error('Upload to Supabase error:', error);
+          return res.status(500).json({ error: error.message });
+        }
+
+        const { data: urlData } = supabase.storage
+          .from(bucketName)
+          .getPublicUrl(fileName);
+
+        res.json({
+          message: 'File uploaded successfully',
+          image: {
+            filename: fileName,
+            url: urlData.publicUrl,
+            originalName: req.file.originalname,
+            size: req.file.size,
+          },
+        });
+      } catch (error) {
+        console.error('Upload error:', error);
+        res.status(500).json({ error: error.message });
+      }
     });
   }
 
   async deleteImage(req, res) {
     try {
       const { filename } = req.params;
-      const uploadDir = process.env.UPLOAD_DIR || './uploads';
-      const filePath = path.join(uploadDir, filename);
+      const bucketName = 'couple-diary';
 
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        res.json({ message: 'File deleted successfully' });
-      } else {
-        res.status(404).json({ error: 'File not found' });
+      const { error } = await supabase.storage
+        .from(bucketName)
+        .remove([filename]);
+
+      if (error) {
+        console.error('Delete from Supabase error:', error);
+        return res.status(500).json({ error: error.message });
       }
+
+      res.json({ message: 'File deleted successfully' });
     } catch (error) {
       console.error('Delete image error:', error);
       res.status(500).json({ error: error.message });

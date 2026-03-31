@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { diaryAPI, uploadAPI } from '../services/api';
 import { format, parseISO, addDays, subDays } from 'date-fns';
-import { FaArrowLeft, FaArrowRight, FaHeart, FaTrash, FaEdit, FaCheck, FaTimes, FaImage, FaTimesCircle } from 'react-icons/fa';
+import { zhCN } from 'date-fns/locale';
+import { FaArrowLeft, FaArrowRight, FaHeart, FaTrash, FaEdit, FaCheck, FaTimes, FaImage, FaTimesCircle, FaHome } from 'react-icons/fa';
 
 export default function DiaryPage() {
   const { date } = useParams();
@@ -119,7 +120,7 @@ export default function DiaryPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen gradient-bg flex items-center justify-center">
+      <div className="min-h-screen bg-[#fef9f3] flex items-center justify-center">
         <div className="text-center">
           <div className="text-4xl mb-4 heart-pulse">💕</div>
           <div className="text-xl text-gray-600">加载中...</div>
@@ -129,29 +130,31 @@ export default function DiaryPage() {
   }
 
   return (
-    <div className="min-h-screen gradient-bg">
+    <div className="min-h-screen bg-[#fef9f3]">
+      {/* 顶部导航栏 */}
       <header className="bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
           <button
             onClick={() => navigate('/')}
-            className="p-2 text-gray-500 hover:text-gray-700 transition"
+            className="flex items-center gap-1 text-gray-600 hover:text-red-500 transition"
           >
-            ← 返回
+            <FaHome size={16} />
+            <span>首页</span>
           </button>
           <div className="text-center">
             <h1 className="text-lg font-bold text-gray-800">{displayDate}</h1>
-            <p className="text-xs text-gray-500">{format(currentDate, 'EEEE', { locale: require('date-fns/locale/zh-CN') })}</p>
+            <p className="text-xs text-gray-500">{format(currentDate, 'EEEE', { locale: zhCN })}</p>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={handlePrevDay}
-              className="p-2 text-gray-500 hover:text-gray-700 transition"
+              className="p-2 text-gray-500 hover:text-red-500 transition rounded-full hover:bg-red-50"
             >
               <FaArrowLeft />
             </button>
             <button
               onClick={handleNextDay}
-              className="p-2 text-gray-500 hover:text-gray-700 transition"
+              className="p-2 text-gray-500 hover:text-red-500 transition rounded-full hover:bg-red-50"
             >
               <FaArrowRight />
             </button>
@@ -159,7 +162,7 @@ export default function DiaryPage() {
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-6">
+      <main className="max-w-4xl mx-auto px-4 py-6">
         {showDeleteConfirm ? (
           <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
             <div className="text-center">
@@ -193,13 +196,13 @@ export default function DiaryPage() {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setIsEditing(true)}
-                    className="p-2 text-gray-500 hover:text-red-500 transition"
+                    className="p-2 text-gray-500 hover:text-red-500 transition rounded-full hover:bg-red-50"
                   >
                     <FaEdit />
                   </button>
                   <button
                     onClick={() => setShowDeleteConfirm(true)}
-                    className="p-2 text-gray-500 hover:text-red-500 transition"
+                    className="p-2 text-gray-500 hover:text-red-500 transition rounded-full hover:bg-red-50"
                   >
                     <FaTrash />
                   </button>

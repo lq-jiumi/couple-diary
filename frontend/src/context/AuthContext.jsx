@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { signInWithCustomToken, connectAuthEmulator } from 'firebase/auth';
-import { auth } from '../config/firebase';
+import { supabase } from '../config/supabase';
 import { authAPI, coupleAPI } from '../services/api';
 
 const AuthContext = createContext(null);
@@ -19,7 +18,6 @@ export function AuthProvider({ children }) {
     }
 
     try {
-      await signInWithCustomToken(auth, token);
       const response = await authAPI.getCurrentUser();
       setUser(response.data.user);
       setPartner(response.data.partner);
@@ -41,12 +39,13 @@ export function AuthProvider({ children }) {
     const { user: userData, token } = response.data;
     localStorage.setItem('token', token);
 
-    await signInWithCustomToken(auth, token);
-
-    const coupleResponse = await coupleAPI.getCoupleInfo();
     setUser(userData);
-    setPartner(coupleResponse.data.partner);
-    setIsBound(coupleResponse.data.isBound);
+    
+    if (userData.coupleId) {
+      const coupleResponse = await coupleAPI.getCoupleInfo();
+      setPartner(coupleResponse.data.partner);
+      setIsBound(coupleResponse.data.isBound);
+    }
 
     return response.data;
   };
@@ -55,8 +54,6 @@ export function AuthProvider({ children }) {
     const response = await authAPI.register({ email, password, displayName });
     const { user: userData, token } = response.data;
     localStorage.setItem('token', token);
-
-    await signInWithCustomToken(auth, token);
 
     setUser(userData);
     return response.data;
